@@ -33,6 +33,7 @@ import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
+import io.netty.handler.codec.http.websocketx.Utf8FrameValidator;
 import io.netty.handler.codec.http.websocketx.WebSocket08FrameDecoder;
 import io.netty.handler.codec.http.websocketx.WebSocket08FrameEncoder;
 import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
@@ -115,6 +116,7 @@ public class ChannelManager {
     public static final String INFLATER_HANDLER = "inflater";
     public static final String CHUNKED_WRITER_HANDLER = "chunked-writer";
     public static final String WS_DECODER_HANDLER = "ws-decoder";
+    public static final String WS_UTF8_VALIDATOR = "ws-utf8-validator";
     public static final String WS_FRAME_AGGREGATOR = "ws-aggregator";
     public static final String WS_COMPRESSOR_HANDLER = "ws-compressor";
     public static final String WS_ENCODER_HANDLER = "ws-encoder";
@@ -1107,6 +1109,12 @@ public class ChannelManager {
         pipeline.addAfter(HTTP_CLIENT_CODEC, WS_ENCODER_HANDLER, new WebSocket08FrameEncoder(true));
         pipeline.addAfter(WS_ENCODER_HANDLER, WS_DECODER_HANDLER, new WebSocket08FrameDecoder(false,
                 config.isEnableWebSocketCompression(), config.getWebSocketMaxFrameSize()));
+
+        // RFC 6455 §8.1: a text frame whose payload is not valid UTF-8 must fail the connection. Netty's own
+        // WebSocketClientProtocolHandler installs this validator by default; the hand-built pipeline here left
+        // it out, so malformed server bytes reached the application as U+FFFD instead. Sit before the app
+        // handler so it validates the text after any permessage-deflate/aggregation that runs ahead of it.
+        pipeline.addBefore(AHC_WS_HANDLER, WS_UTF8_VALIDATOR, new Utf8FrameValidator());
 
         if (config.isAggregateWebSocketFrameFragments()) {
             pipeline.addAfter(WS_DECODER_HANDLER, WS_FRAME_AGGREGATOR, new WebSocketFrameAggregator(config.getWebSocketMaxBufferSize()));
