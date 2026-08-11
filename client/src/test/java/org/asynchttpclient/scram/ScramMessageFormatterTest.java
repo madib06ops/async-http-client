@@ -89,6 +89,26 @@ class ScramMessageFormatterTest {
     }
 
     @Test
+    void testFormatAuthorizationHeader_rejectsSidAuthParamInjection() {
+        // A server-supplied sid that breaks out of the unquoted token and injects a forged data auth-param.
+        assertThrows(IllegalArgumentException.class, () -> ScramMessageFormatter.formatAuthorizationHeader(
+                "SCRAM-SHA-256", null, "AAAA, data=forged", "cmVhbGRhdGE="));
+    }
+
+    @Test
+    void testFormatAuthorizationHeader_rejectsRealmQuoteBreakout() {
+        // A server-supplied realm carrying a double quote closes the quoted-string early.
+        assertThrows(IllegalArgumentException.class, () -> ScramMessageFormatter.formatAuthorizationHeader(
+                "SCRAM-SHA-256", "x\" evil=\"y", null, "cmVhbGRhdGE="));
+    }
+
+    @Test
+    void testFormatAuthorizationHeader_rejectsCrlf() {
+        assertThrows(IllegalArgumentException.class, () -> ScramMessageFormatter.formatAuthorizationHeader(
+                "SCRAM-SHA-256", null, "AAAA\r\nX-Evil: 1", "cmVhbGRhdGE="));
+    }
+
+    @Test
     void testEscapeUsername() {
         assertEquals("user", ScramMessageFormatter.escapeUsername("user"));
         assertEquals("us=3Der", ScramMessageFormatter.escapeUsername("us=er"));

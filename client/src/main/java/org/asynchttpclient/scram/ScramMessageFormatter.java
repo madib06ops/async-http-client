@@ -82,12 +82,31 @@ public final class ScramMessageFormatter {
                                                     @Nullable String sid, String base64Data) {
         StringBuilder sb = new StringBuilder(mechanism);
         if (realm != null) {
-            sb.append(" realm=\"").append(realm).append("\",");
+            sb.append(" realm=\"").append(requireSafeChallengeValue("realm", realm, true)).append("\",");
         }
         if (sid != null) {
-            sb.append(" sid=").append(sid).append(",");
+            sb.append(" sid=").append(requireSafeChallengeValue("sid", sid, false)).append(",");
         }
         sb.append(" data=\"").append(base64Data).append("\"");
         return sb.toString();
+    }
+
+    /**
+     * Reject a server-supplied challenge value before it is echoed into the credentials header. {@code realm}
+     * and {@code sid} come from the SCRAM {@code WWW-Authenticate} / {@code Proxy-Authenticate} challenge (RFC
+     * 7804 §4): realm is written as a quoted-string and sid as a bare token. A double quote or backslash closes
+     * (or escapes past) the quoted realm, and a comma or space ends the unquoted sid, so a hostile server could
+     * append forged auth-params — a second {@code data} for an intermediary to parse — to the {@code
+     * Authorization} the client emits; a CR or LF splits the header outright. An RFC 7235 realm and the base64
+     * sid never legitimately contain these, so fail closed rather than serialize an ambiguous header.
+     */
+    private static String requireSafeChallengeValue(String name, String value, boolean quoted) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < ' ' || c == 0x7f || c == '"' || c == '\\' || (!quoted && (c == ',' || c == ' '))) {
+                throw new IllegalArgumentException("Illegal character in SCRAM " + name + " challenge value");
+            }
+        }
+        return value;
     }
 }
