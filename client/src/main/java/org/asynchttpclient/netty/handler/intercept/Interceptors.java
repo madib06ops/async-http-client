@@ -43,7 +43,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.Locale;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.AUTHORIZATION;
 import static io.netty.handler.codec.http.HttpHeaderNames.PROXY_AUTHORIZATION;
@@ -240,7 +242,12 @@ public class Interceptors {
                         + "could not be recovered, so mutual authentication is not enforced for it", headerName);
                 return false;
             }
-            if (!rspauth.equalsIgnoreCase(expectedRspauth)) {
+            // rspauth is a secret-derived MAC, so compare it in constant time as the SCRAM ServerSignature
+            // check already does; equalsIgnoreCase short-circuits on the first differing character and leaks
+            // how far a server guess matched. RFC 7616 section 3.4.1 spells it lowercase hex; fold both first.
+            byte[] expectedBytes = expectedRspauth.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
+            byte[] receivedBytes = rspauth.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
+            if (!MessageDigest.isEqual(expectedBytes, receivedBytes)) {
                 // RFC 7616 §3.5: a present-but-invalid rspauth means the server failed to prove knowledge of
                 // the shared secret, so the client must not treat the response as an authenticated success.
                 // Mirror the SCRAM ServerSignature handling (#2235): abort the request.
