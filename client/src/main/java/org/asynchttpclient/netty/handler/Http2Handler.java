@@ -32,6 +32,7 @@ import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2ResetFrame;
 import io.netty.handler.codec.http2.Http2StreamChannel;
+import io.netty.util.AttributeKey;
 import org.asynchttpclient.AsyncHandler;
 import org.asynchttpclient.AsyncHandler.State;
 import org.asynchttpclient.AsyncHttpClientConfig;
@@ -62,6 +63,11 @@ public final class Http2Handler extends AsyncHttpClientHandler {
     private static final HttpVersion HTTP_2 = new HttpVersion("HTTP", 2, 0, true);
     private static final HttpHeadersFactory HEADERS_FACTORY = DefaultHttpHeadersFactory.headersFactory();
 
+    // Set on a stream's child channel once its final (non-1xx) response HEADERS have been delivered, so a
+    // later HEADERS frame carrying no :status is recognised as trailers rather than mistaken for a second
+    // response. The child channel is single-use per stream, so this starts unset for every request.
+    private static final AttributeKey<Boolean> RESPONSE_HEADERS_RECEIVED = AttributeKey.valueOf("ahcHttp2ResponseHeadersReceived");
+
     public Http2Handler(AsyncHttpClientConfig config, ChannelManager channelManager, NettyRequestSender requestSender) {
         super(config, channelManager, requestSender);
     }
@@ -83,8 +89,15 @@ public final class Http2Handler extends AsyncHttpClientHandler {
                 Http2HeadersFrame headersFrame = (Http2HeadersFrame) e;
                 if (headersFrame.headers().status() != null) {
                     handleHttp2HeadersFrame(headersFrame, channel, future, handler);
-                } else {
+                } else if (channel.attr(RESPONSE_HEADERS_RECEIVED).get() != null) {
                     handleHttp2TrailingHeadersFrame(headersFrame, channel, future, handler);
+                } else {
+                    // RFC 9113 section 8.3.2: a response whose HEADERS frame carries no :status pseudo-header is
+                    // malformed. Only a HEADERS frame arriving after the response headers is a trailer; the first
+                    // one without :status is the response itself, so fail the stream instead of routing it to
+                    // onTrailingHeadersReceived, which would skip onStatusReceived, onHeadersReceived and the
+                    // interceptor chain (redirect, auth, cookie handling) and deliver it as a successful exchange.
+                    throw new IOException("Malformed HTTP/2 response: HEADERS frame without :status pseudo-header");
                 }
             } else if (e instanceof Http2DataFrame) {
                 handleHttp2DataFrame((Http2DataFrame) e, channel, future, handler);
@@ -168,6 +181,12 @@ public final class Http2Handler extends AsyncHttpClientHandler {
         // again on the real response. The interim HEADERS has endStream=false, so just wait for the final frame.
         if (statusCode > 100 && statusCode < 200) {
             return;
+        }
+
+        // A 100 is still interim (the final response HEADERS, carrying its own :status, follows), so only a
+        // final 2xx+ marks the stream. From here on, a HEADERS frame with no :status is a trailer.
+        if (statusCode >= 200) {
+            channel.attr(RESPONSE_HEADERS_RECEIVED).set(Boolean.TRUE);
         }
 
         if (!interceptors.exitAfterIntercept(channel, future, handler, syntheticResponse, status, responseHeaders)) {

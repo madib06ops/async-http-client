@@ -48,6 +48,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -55,6 +56,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.asynchttpclient.Dsl.asyncHttpClient;
 import static org.asynchttpclient.Dsl.config;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Protocol-conformance regression tests for the residual HTTP/2 review fixes:
@@ -169,6 +171,9 @@ public class Http2ConformanceRegressionTest {
                     CharSequence auth = h.authority();
                     ctx.writeAndFlush(new DefaultHttp2HeadersFrame(new DefaultHttp2Headers()
                             .status("200").set("x-saw-authority", auth == null ? "none" : auth.toString()), true));
+                } else if (path.contains("nostatus")) {
+                    // A malformed response: a HEADERS frame with no :status pseudo-header (RFC 9113 section 8.3.2).
+                    ctx.writeAndFlush(new DefaultHttp2HeadersFrame(new DefaultHttp2Headers().set("x-test", "value"), true));
                 } else if (endStream) {
                     ctx.writeAndFlush(new DefaultHttp2HeadersFrame(new DefaultHttp2Headers().status("200"), true));
                 }
@@ -291,6 +296,44 @@ public class Http2ConformanceRegressionTest {
                     .execute().get(10, SECONDS);
             assertEquals("localhost:" + serverPort, r.getHeader("x-saw-authority"),
                     ":authority must carry host[:port] with the userinfo subcomponent stripped (RFC 9113 §8.3.1)");
+        }
+    }
+
+    // A response HEADERS frame without a :status pseudo-header is malformed (RFC 9113 section 8.3.2) and must fail
+    // the stream, not be delivered through onTrailingHeadersReceived as a successful exchange.
+    @Test
+    public void responseWithoutStatusIsRejected() throws Exception {
+        try (AsyncHttpClient client = client()) {
+            AtomicInteger statusCount = new AtomicInteger(0);
+            assertThrows(ExecutionException.class, () -> client.prepareGet(url("/nostatus")).execute(new AsyncHandler<Void>() {
+                @Override
+                public State onStatusReceived(HttpResponseStatus responseStatus) {
+                    statusCount.incrementAndGet();
+                    return State.CONTINUE;
+                }
+
+                @Override
+                public State onHeadersReceived(HttpHeaders headers) {
+                    return State.CONTINUE;
+                }
+
+                @Override
+                public State onBodyPartReceived(HttpResponseBodyPart bodyPart) {
+                    return State.CONTINUE;
+                }
+
+                @Override
+                public void onThrowable(Throwable t) {
+                }
+
+                @Override
+                public Void onCompleted() {
+                    return null;
+                }
+            }).get(10, SECONDS),
+                    "a response without a :status pseudo-header is malformed (RFC 9113 section 8.3.2) and must fail the request");
+            assertEquals(0, statusCount.get(),
+                    "onStatusReceived must not fire for a malformed (:status-less) response misread as trailers");
         }
     }
 }
