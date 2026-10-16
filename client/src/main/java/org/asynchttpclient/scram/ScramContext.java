@@ -29,6 +29,11 @@ import static java.util.Objects.requireNonNull;
  */
 public class ScramContext {
 
+    /**
+     * Minimum iteration count for SCRAM-SHA-256 (RFC 7677 §4).
+     */
+    static final int MIN_ITERATION_COUNT = 4096;
+
     private ScramState state;
     private final String mechanism;
     private final String username;
@@ -78,6 +83,10 @@ public class ScramContext {
         ScramMessageParser.validateNoncePrefix(clientNonce, parsed.fullNonce);
 
         // Validate iteration count
+        if (parsed.iterationCount < MIN_ITERATION_COUNT) {
+            throw new ScramException("Server iteration count " + parsed.iterationCount
+                    + " is below the minimum " + MIN_ITERATION_COUNT + " (RFC 7677)");
+        }
         if (parsed.iterationCount > maxIterationCount) {
             throw new ScramException("Server iteration count " + parsed.iterationCount
                     + " exceeds maximum allowed " + maxIterationCount);
