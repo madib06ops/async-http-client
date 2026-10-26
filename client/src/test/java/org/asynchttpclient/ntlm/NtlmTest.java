@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -186,9 +187,45 @@ public class NtlmTest extends AbstractBasicTest {
             String type3Msg = NtlmEngine.generateType3Msg("username", "password", "localhost", "workstation",
                     Base64.getEncoder().encodeToString(buf.toByteArray()));
             assertEquals(type3Msg,
-                    "TlRMTVNTUAADAAAAGAAYAEgAAAAYABgAYAAAABIAEgB4AAAAEAAQAIoAAAAWABYAmgAAAAAAAACwAAAAAQAAAgUBKAoAAAAP1g6lqqN1HZ0wSSxeQ5riQkyh7/UexwVlCPQm0SHU2vsDQm2wM6NbT2zPonPzLJL0TABPAEMAQQBMAEgATwBTAFQAdQBzAGUAcgBuAGEAbQBlAFcATwBSAEsAUwBUAEEAVABJAE8ATgA=",
+                    "TlRMTVNTUAADAAAAGAAYAEgAAAAYABgAYAAAABIAEgB4AAAAEAAQAIoAAAAWABYAmgAAAAAAAACwAAAAAQAAAgUBKAoAAAAPCPQm0SHU2vsDQm2wM6NbT2zPonPzLJL0CPQm0SHU2vsDQm2wM6NbT2zPonPzLJL0TABPAEMAQQBMAEgATwBTAFQAdQBzAGUAcgBuAGEAbQBlAFcATwBSAEsAUwBUAEEAVABJAE8ATgA=",
                     "Incorrect type3 message generated");
         }
+    }
+
+    private static String type2Msg(int flags) {
+        byte[] msg = new byte[32];
+        System.arraycopy("NTLMSSP\0".getBytes(StandardCharsets.US_ASCII), 0, msg, 0, 8);
+        NtlmEngine.writeULong(msg, 2, 8);
+        NtlmEngine.writeULong(msg, flags, 20);
+        System.arraycopy(new byte[]{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, (byte) 0x88}, 0, msg, 24, 8);
+        return Base64.getEncoder().encodeToString(msg);
+    }
+
+    private static byte[] securityBuffer(byte[] msg, int index) {
+        int length = msg[index] & 0xff | (msg[index + 1] & 0xff) << 8;
+        int offset = msg[index + 4] & 0xff | (msg[index + 5] & 0xff) << 8;
+        return Arrays.copyOfRange(msg, offset, offset + length);
+    }
+
+    private static byte[] type3For(int type2Flags) {
+        return Base64.getDecoder().decode(NtlmEngine.generateType3Msg("Zaphod", "Beeblebrox", "Ursa-Minor", "LightCity",
+                type2Msg(type2Flags)));
+    }
+
+    @Test
+    public void testType3NeverCarriesLmResponse() {
+        // Unicode | NTLM, no target info and no NTLM2 session security: plain NTLMv1
+        byte[] type3 = type3For(0x00000201);
+        assertArrayEquals(securityBuffer(type3, 20), securityBuffer(type3, 12), "LM field must repeat the NT response");
+    }
+
+    @Test
+    public void testType3IgnoresServerRequestedLmKey() {
+        // Unicode | Sign | NTLM, with and without LM_KEY
+        byte[] withoutLmKey = type3For(0x00000211);
+        byte[] withLmKey = type3For(0x00000291);
+        assertArrayEquals(securityBuffer(withoutLmKey, 52), securityBuffer(withLmKey, 52), "session key must not come from the LM hash");
+        assertEquals(0, withLmKey[60] & 0x80, "Type 3 must not claim LM_KEY");
     }
 
     @Test
@@ -220,7 +257,7 @@ public class NtlmTest extends AbstractBasicTest {
                 httpResponse.setStatus(401);
                 httpResponse.setHeader("WWW-Authenticate", "NTLM TlRMTVNTUAACAAAAAAAAACgAAAABggAAU3J2Tm9uY2UAAAAAAAAAAA==");
 
-            } else if ("NTLM TlRMTVNTUAADAAAAGAAYAEgAAAAYABgAYAAAABQAFAB4AAAADAAMAIwAAAASABIAmAAAAAAAAACqAAAAAYIAAgUBKAoAAAAPrYfKbe/jRoW5xDxHeoxC1gBmfWiS5+iX4OAN4xBKG/IFPwfH3agtPEia6YnhsADTVQBSAFMAQQAtAE0ASQBOAE8AUgBaAGEAcABoAG8AZABMAEkARwBIAFQAQwBJAFQAWQA="
+            } else if ("NTLM TlRMTVNTUAADAAAAGAAYAEgAAAAYABgAYAAAABQAFAB4AAAADAAMAIwAAAASABIAmAAAAAAAAACqAAAAAYIAAgUBKAoAAAAP4OAN4xBKG/IFPwfH3agtPEia6YnhsADT4OAN4xBKG/IFPwfH3agtPEia6YnhsADTVQBSAFMAQQAtAE0ASQBOAE8AUgBaAGEAcABoAG8AZABMAEkARwBIAFQAQwBJAFQAWQA="
                     .equals(authorization)) {
                 httpResponse.setStatus(200);
             } else {

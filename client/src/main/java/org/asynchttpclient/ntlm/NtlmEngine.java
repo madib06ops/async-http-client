@@ -1137,49 +1137,29 @@ public final class NtlmEngine {
 
             // Use the new code to calculate the responses, including v2 if that
             // seems warranted.
+            // Nothing sent may be derived from the LM hash: it is the uppercased password cut into two 7-byte
+            // DES keys, so the server would get an offline oracle for the password over a challenge it chose.
+            // That rules out the LM response and the LM key the server can ask for with
+            // NTLMSSP_NEGOTIATE_LM_KEY, which our NEGOTIATE never offers. MS-NLMP 3.3.1 NoLMResponseNTLMv1.
             byte[] userSessionKey;
-            try {
-                // This conditional may not work on Windows Server 2008 R2 and above, where it has not yet
-                // been tested
-                if ((type2Flags & FLAG_TARGETINFO_PRESENT) != 0 && targetInformation != null && target != null) {
-                    // NTLMv2
-                    ntResp = gen.getNTLMv2Response(targetInformation);
-                    lmResp = gen.getLMv2Response();
-                    if ((type2Flags & FLAG_REQUEST_LAN_MANAGER_KEY) != 0) {
-                        userSessionKey = gen.getLanManagerSessionKey();
-                    } else {
-                        userSessionKey = gen.getNTLMv2UserSessionKey(targetInformation);
-                    }
+            // This conditional may not work on Windows Server 2008 R2 and above, where it has not yet
+            // been tested
+            if ((type2Flags & FLAG_TARGETINFO_PRESENT) != 0 && targetInformation != null && target != null) {
+                // NTLMv2
+                ntResp = gen.getNTLMv2Response(targetInformation);
+                lmResp = gen.getLMv2Response();
+                userSessionKey = gen.getNTLMv2UserSessionKey(targetInformation);
+            } else {
+                // NTLMv1
+                if ((type2Flags & FLAG_REQUEST_NTLM2_SESSION) != 0) {
+                    // NTLM2 session stuff is requested
+                    ntResp = gen.getNTLM2SessionResponse();
+                    lmResp = gen.getLM2SessionResponse();
+                    userSessionKey = gen.getNTLM2SessionResponseUserSessionKey();
                 } else {
-                    // NTLMv1
-                    if ((type2Flags & FLAG_REQUEST_NTLM2_SESSION) != 0) {
-                        // NTLM2 session stuff is requested
-                        ntResp = gen.getNTLM2SessionResponse();
-                        lmResp = gen.getLM2SessionResponse();
-                        if ((type2Flags & FLAG_REQUEST_LAN_MANAGER_KEY) != 0) {
-                            userSessionKey = gen.getLanManagerSessionKey();
-                        } else {
-                            userSessionKey = gen.getNTLM2SessionResponseUserSessionKey();
-                        }
-                    } else {
-                        ntResp = gen.getNTLMResponse();
-                        lmResp = gen.getLMResponse();
-                        if ((type2Flags & FLAG_REQUEST_LAN_MANAGER_KEY) != 0) {
-                            userSessionKey = gen.getLanManagerSessionKey();
-                        } else {
-                            userSessionKey = gen.getNTLMUserSessionKey();
-                        }
-                    }
-                }
-            } catch (final NtlmEngineException e) {
-                // This likely means we couldn't find the MD4 hash algorithm -
-                // fail back to just using LM
-                ntResp = new byte[0];
-                lmResp = gen.getLMResponse();
-                if ((type2Flags & FLAG_REQUEST_LAN_MANAGER_KEY) != 0) {
-                    userSessionKey = gen.getLanManagerSessionKey();
-                } else {
-                    userSessionKey = gen.getLMUserSessionKey();
+                    ntResp = gen.getNTLMResponse();
+                    lmResp = ntResp;
+                    userSessionKey = gen.getNTLMUserSessionKey();
                 }
             }
 
@@ -1275,8 +1255,7 @@ public final class NtlmEngine {
                     //FLAG_DOMAIN_PRESENT |
 
                     // Required flags
-                    type2Flags & FLAG_REQUEST_LAN_MANAGER_KEY
-                            | type2Flags & FLAG_REQUEST_NTLMv1
+                    type2Flags & FLAG_REQUEST_NTLMv1
                             | type2Flags & FLAG_REQUEST_NTLM2_SESSION
                             |
 
