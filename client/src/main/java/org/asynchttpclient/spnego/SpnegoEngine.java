@@ -36,6 +36,7 @@
  */
 package org.asynchttpclient.spnego;
 
+import com.sun.security.jgss.ExtendedGSSContext;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -186,7 +187,7 @@ public class SpnegoEngine {
                         myCred,
                         GSSContext.DEFAULT_LIFETIME);
                 gssContext.requestMutualAuth(true);
-                gssContext.requestCredDeleg(true);
+                requestDelegPolicy(gssContext);
             } catch (GSSException ex) {
                 log.error("generateToken", ex);
                 // BAD MECH means we are likely to be using 1.5, fall back to Kerberos MECH.
@@ -207,7 +208,7 @@ public class SpnegoEngine {
                 gssContext = manager.createContext(serverName.canonicalize(negotiationOid), negotiationOid, null,
                         GSSContext.DEFAULT_LIFETIME);
                 gssContext.requestMutualAuth(true);
-                gssContext.requestCredDeleg(true);
+                requestDelegPolicy(gssContext);
             }
 
             // TODO suspicious: this will always be null because no value has been assigned before. Assign directly?
@@ -249,6 +250,16 @@ public class SpnegoEngine {
             throw new SpnegoEngineException(gsse.getMessage());
         } catch (IOException | LoginException | PrivilegedActionException ex) {
             throw new SpnegoEngineException(ex.getMessage());
+        }
+    }
+
+    /**
+     * Forward the TGT only to a service the KDC marks OK-AS-DELEGATE (RFC 4120 section 2.8), not to any server that
+     * answers Negotiate: whoever holds the forwarded TGT can act as the user towards every other service in the realm.
+     */
+    private static void requestDelegPolicy(GSSContext gssContext) throws GSSException {
+        if (gssContext instanceof ExtendedGSSContext) {
+            ((ExtendedGSSContext) gssContext).requestDelegPolicy(true);
         }
     }
 

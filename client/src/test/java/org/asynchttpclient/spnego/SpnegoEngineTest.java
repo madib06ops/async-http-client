@@ -18,15 +18,27 @@ package org.asynchttpclient.spnego;
 import org.apache.commons.io.FileUtils;
 import org.apache.kerby.kerberos.kerb.server.SimpleKdcServer;
 import org.asynchttpclient.AbstractBasicTest;
+import org.ietf.jgss.GSSContext;
+import org.ietf.jgss.GSSCredential;
+import org.ietf.jgss.GSSManager;
+import org.ietf.jgss.Oid;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.security.auth.Subject;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.auth.login.Configuration;
+import javax.security.auth.login.LoginContext;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.security.PrivilegedExceptionAction;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -143,6 +155,59 @@ public class SpnegoEngineTest extends AbstractBasicTest {
         String token = spnegoEngine.generateToken("localhost");
         assertNotNull(token);
         assertTrue(token.startsWith("YII"));
+    }
+
+    @Test
+    public void testSpnegoTokenDoesNotDelegateCredentialsByDefault() throws Exception {
+        // A forwardable TGT is what makes delegation possible at all.
+        File krb5Conf = new File(System.getProperty("java.security.krb5.conf"));
+        String conf = FileUtils.readFileToString(krb5Conf, StandardCharsets.UTF_8);
+        FileUtils.writeStringToFile(krb5Conf, conf.replace("[libdefaults]", "[libdefaults]\n    forwardable = true"),
+                StandardCharsets.UTF_8);
+
+        SpnegoEngine spnegoEngine = new SpnegoEngine("alice",
+                "alice",
+                "bob",
+                "service.ws.apache.org",
+                false,
+                null,
+                "alice",
+                null);
+        byte[] token = Base64.getDecoder().decode(spnegoEngine.generateToken("localhost"));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("useKeyTab", "true");
+        options.put("storeKey", "true");
+        options.put("isInitiator", "false");
+        options.put("refreshKrb5Config", "true");
+        options.put("keyTab", bobKeytab.getCanonicalPath());
+        options.put("principal", bob);
+        Configuration acceptorConfig = new Configuration() {
+            @Override
+            public AppConfigurationEntry[] getAppConfigurationEntry(String name) {
+                return new AppConfigurationEntry[]{new AppConfigurationEntry("com.sun.security.auth.module.Krb5LoginModule",
+                        AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options)};
+            }
+        };
+        LoginContext loginContext = new LoginContext("", new Subject(), null, acceptorConfig);
+        loginContext.login();
+
+        PrivilegedExceptionAction<GSSContext> accept = () -> {
+            GSSManager manager = GSSManager.getInstance();
+            GSSCredential acceptorCred = manager.createCredential(null, GSSCredential.INDEFINITE_LIFETIME,
+                    new Oid("1.3.6.1.5.5.2"), GSSCredential.ACCEPT_ONLY);
+            GSSContext context = manager.createContext(acceptorCred);
+            context.acceptSecContext(token, 0, token.length);
+            return context;
+        };
+        GSSContext acceptorContext = Subject.doAs(loginContext.getSubject(), accept);
+        try {
+            assertTrue(acceptorContext.isEstablished());
+            assertFalse(acceptorContext.getCredDelegState());
+        } finally {
+            acceptorContext.dispose();
+            loginContext.logout();
+        }
     }
 
     @Test
