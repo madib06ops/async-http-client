@@ -40,10 +40,13 @@ import org.asynchttpclient.netty.ws.NettyWebSocket;
 import org.asynchttpclient.ws.WebSocketUpgradeHandler;
 
 import java.io.IOException;
+import java.util.List;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
 import static io.netty.handler.codec.http.HttpHeaderNames.SEC_WEBSOCKET_ACCEPT;
+import static io.netty.handler.codec.http.HttpHeaderNames.SEC_WEBSOCKET_EXTENSIONS;
 import static io.netty.handler.codec.http.HttpHeaderNames.SEC_WEBSOCKET_KEY;
+import static io.netty.handler.codec.http.HttpHeaderNames.SEC_WEBSOCKET_PROTOCOL;
 import static io.netty.handler.codec.http.HttpHeaderNames.UPGRADE;
 import static io.netty.handler.codec.http.HttpResponseStatus.SWITCHING_PROTOCOLS;
 import static org.asynchttpclient.netty.channel.ChannelManager.WS_DECODER_HANDLER;
@@ -68,7 +71,8 @@ public final class WebSocketHandler extends AsyncHttpClientHandler {
 
     private void upgrade(Channel channel, NettyResponseFuture<?> future, WebSocketUpgradeHandler handler, HttpResponse response, HttpHeaders responseHeaders) throws Exception {
         boolean validStatus = response.status().equals(SWITCHING_PROTOCOLS);
-        boolean validUpgrade = response.headers().get(UPGRADE) != null;
+        // RFC 6455 section 4.1 step 2: the value has to be websocket, not merely present.
+        boolean validUpgrade = HttpHeaderValues.WEBSOCKET.contentEqualsIgnoreCase(response.headers().get(UPGRADE));
         String connection = response.headers().get(CONNECTION);
         boolean validConnection = HttpHeaderValues.UPGRADE.contentEqualsIgnoreCase(connection);
         final boolean headerOK = handler.onHeadersReceived(responseHeaders) == State.CONTINUE;
@@ -77,10 +81,25 @@ public final class WebSocketHandler extends AsyncHttpClientHandler {
             return;
         }
 
+        HttpHeaders requestHeaders = future.getNettyRequest().getHttpRequest().headers();
         String accept = response.headers().get(SEC_WEBSOCKET_ACCEPT);
-        String key = getAcceptKey(future.getNettyRequest().getHttpRequest().headers().get(SEC_WEBSOCKET_KEY));
+        String key = getAcceptKey(requestHeaders.get(SEC_WEBSOCKET_KEY));
         if (accept == null || !accept.equals(key)) {
             requestSender.abort(channel, future, new IOException("Invalid challenge. Actual: " + accept + ". Expected: " + key));
+            return;
+        }
+
+        // RFC 6455 section 4.1 steps 5 and 6: the accept key only proves the peer saw the key, it does not bind
+        // what was negotiated, so a subprotocol or extension the request did not offer fails the connection.
+        String subprotocol = response.headers().get(SEC_WEBSOCKET_PROTOCOL);
+        if (subprotocol != null && !offered(requestHeaders.getAll(SEC_WEBSOCKET_PROTOCOL), subprotocol)) {
+            requestSender.abort(channel, future, new IOException("Invalid subprotocol. Actual: " + subprotocol
+                    + ". Expected one of: " + requestHeaders.getAll(SEC_WEBSOCKET_PROTOCOL)));
+            return;
+        }
+        String extensions = response.headers().get(SEC_WEBSOCKET_EXTENSIONS);
+        if (extensions != null && !extensions.trim().isEmpty() && !requestHeaders.contains(SEC_WEBSOCKET_EXTENSIONS)) {
+            requestSender.abort(channel, future, new IOException("Invalid extensions. Actual: " + extensions + ". None offered"));
             return;
         }
 
@@ -101,6 +120,19 @@ public final class WebSocketHandler extends AsyncHttpClientHandler {
             logger.warn("onSuccess unexpected exception", ex);
         }
         future.done();
+    }
+
+    // Subprotocol names are case-sensitive tokens; the request may spread its offers over several header fields.
+    private static boolean offered(List<String> offers, String selected) {
+        String token = selected.trim();
+        for (String offer : offers) {
+            for (String candidate : offer.split(",")) {
+                if (candidate.trim().equals(token)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void abort(Channel channel, NettyResponseFuture<?> future, WebSocketUpgradeHandler handler, HttpResponseStatus status) {
