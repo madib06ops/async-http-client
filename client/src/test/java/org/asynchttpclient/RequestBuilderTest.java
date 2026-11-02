@@ -434,6 +434,16 @@ public class RequestBuilderTest {
     }
 
     @Test
+    public void testRequestToStringOmitsUserInfo() {
+        Request request = get("https://user:url-secret@localhost:8443/test?q=1").build();
+
+        String value = request.toString();
+        assertFalse(value.contains("url-secret"));
+        assertFalse(value.contains("user"));
+        assertTrue(value.startsWith("https://localhost:8443/test?q=1\tGET"));
+    }
+
+    @Test
     public void testRedirectRefusalOverridesSurviveToBuilder() {
         Request original = new RequestBuilder("PUT")
                 .setUrl("https://example.com/upload")

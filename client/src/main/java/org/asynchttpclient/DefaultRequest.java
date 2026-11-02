@@ -354,7 +354,7 @@ public class DefaultRequest implements Request {
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder(getUrl());
+        StringBuilder sb = new StringBuilder(uri.toUrlWithoutUserInfo());
         sb.append('\t');
         sb.append(method);
         sb.append("\theaders:");
