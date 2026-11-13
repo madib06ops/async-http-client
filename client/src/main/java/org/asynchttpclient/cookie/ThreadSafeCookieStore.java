@@ -317,6 +317,17 @@ public final class ThreadSafeCookieStore implements CookieStore {
             hostOnly = true;
         }
 
+        // rfc6265bis section 5.7 cookie prefixes, matched case-insensitively. A server reading __Host-
+        // relies on the cookie having come from its own host, so a sibling must not plant it with Domain.
+        String name = cookie.name();
+        if (name.regionMatches(true, 0, "__Secure-", 0, 9) && !cookie.isSecure()) {
+            return;
+        }
+        if (name.regionMatches(true, 0, "__Host-", 0, 7)
+                && (!cookie.isSecure() || !hostOnly || !"/".equals(cookie.path()))) {
+            return;
+        }
+
         String keyPath = cookiePath(cookie.path(), requestPath);
         // Cookie names are case-sensitive; folding them is an old deviation, kept so existing applications
         // send what they did. ROOT only stops a Turkish default locale missing the key.
