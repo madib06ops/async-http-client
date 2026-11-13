@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_RANGE;
 import static io.netty.handler.codec.http.HttpHeaderNames.RANGE;
 
 /**
@@ -55,6 +56,7 @@ public class ResumableAsyncHandler implements AsyncHandler<Response> {
     private final @Nullable AsyncHandler<Response> decoratedAsyncHandler;
     private final boolean accumulateBody;
     private String url = "";
+    private boolean partialContent;
     private final ResponseBuilder responseBuilder = new ResponseBuilder();
     private ResumableListener resumableListener = new NULLResumableListener();
 
@@ -106,7 +108,13 @@ public class ResumableAsyncHandler implements AsyncHandler<Response> {
     @Override
     public State onStatusReceived(final HttpResponseStatus status) throws Exception {
         responseBuilder.accumulate(status);
-        if (status.getStatusCode() == 200 || status.getStatusCode() == 206) {
+        int statusCode = status.getStatusCode();
+        if (statusCode == 200 && byteTransferred.get() > 0) {
+            // The server ignored the Range: its body starts at byte 0 and must not land after the bytes already held.
+            return AsyncHandler.State.ABORT;
+        }
+        if (statusCode == 200 || statusCode == 206) {
+            partialContent = statusCode == 206;
             url = status.getUri().toUrl();
         } else {
             return AsyncHandler.State.ABORT;
@@ -173,6 +181,10 @@ public class ResumableAsyncHandler implements AsyncHandler<Response> {
                 return AsyncHandler.State.ABORT;
             }
         }
+        long offset = byteTransferred.get();
+        if (partialContent && offset > 0 && contentRangeStart(headers.get(CONTENT_RANGE)) != offset) {
+            return AsyncHandler.State.ABORT;
+        }
 
         if (decoratedAsyncHandler != null) {
             return decoratedAsyncHandler.onHeadersReceived(headers);
@@ -184,6 +196,24 @@ public class ResumableAsyncHandler implements AsyncHandler<Response> {
     public State onTrailingHeadersReceived(HttpHeaders headers) {
         responseBuilder.accumulate(headers);
         return State.CONTINUE;
+    }
+
+    /**
+     * The first-pos of a single-part {@code Content-Range} (RFC 9110 section 14.4), or -1 when there is none.
+     */
+    private static long contentRangeStart(@Nullable String contentRange) {
+        if (contentRange == null || !contentRange.regionMatches(true, 0, "bytes ", 0, 6)) {
+            return -1;
+        }
+        int dash = contentRange.indexOf('-', 6);
+        if (dash == -1) {
+            return -1;
+        }
+        try {
+            return Long.parseLong(contentRange.substring(6, dash));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     /**

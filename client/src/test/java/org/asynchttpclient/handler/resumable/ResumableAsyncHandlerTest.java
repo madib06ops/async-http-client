@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_RANGE;
 import static io.netty.handler.codec.http.HttpHeaderNames.RANGE;
 import static org.asynchttpclient.Dsl.get;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -82,6 +83,39 @@ public class ResumableAsyncHandlerTest {
         when(responseStatus206.getUri()).thenReturn(mock(Uri.class));
         State state = handler.onStatusReceived(responseStatus206);
         assertEquals(AsyncHandler.State.CONTINUE, state, "Status should be CONTINUE for a 'Partial Content' response");
+    }
+
+    @Test
+    public void testOnStatusReceivedOkStatusWhenResuming() throws Exception {
+        ResumableAsyncHandler handler = new ResumableAsyncHandler(5000);
+        HttpResponseStatus responseStatus200 = mock(HttpResponseStatus.class);
+        when(responseStatus200.getStatusCode()).thenReturn(200);
+        when(responseStatus200.getUri()).thenReturn(mock(Uri.class));
+        State state = handler.onStatusReceived(responseStatus200);
+        assertEquals(AsyncHandler.State.ABORT, state, "A full 200 body must not be appended to a partial download");
+    }
+
+    @Test
+    public void testOnHeadersReceivedContentRangeWhenResuming() throws Exception {
+        assertEquals(State.CONTINUE, partialContentHeadersState(5000, "bytes 5000-5999/6000"));
+        assertEquals(State.ABORT, partialContentHeadersState(5000, "bytes 0-5999/6000"));
+        assertEquals(State.ABORT, partialContentHeadersState(5000, "bytes 4000-5999/*"));
+        assertEquals(State.ABORT, partialContentHeadersState(5000, "bytes */6000"));
+        assertEquals(State.ABORT, partialContentHeadersState(5000, null));
+        assertEquals(State.CONTINUE, partialContentHeadersState(0, null));
+    }
+
+    private static State partialContentHeadersState(long byteTransferred, String contentRange) throws Exception {
+        ResumableAsyncHandler handler = new ResumableAsyncHandler(byteTransferred);
+        HttpResponseStatus responseStatus206 = mock(HttpResponseStatus.class);
+        when(responseStatus206.getStatusCode()).thenReturn(206);
+        when(responseStatus206.getUri()).thenReturn(mock(Uri.class));
+        assertEquals(State.CONTINUE, handler.onStatusReceived(responseStatus206));
+        HttpHeaders responseHeaders = new DefaultHttpHeaders();
+        if (contentRange != null) {
+            responseHeaders.add(CONTENT_RANGE, contentRange);
+        }
+        return handler.onHeadersReceived(responseHeaders);
     }
 
     @Test
