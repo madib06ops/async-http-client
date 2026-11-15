@@ -267,7 +267,10 @@ final class UriParser {
 
     // /./
     private void removeEmbeddedDot() {
-        path = path.replace("/./", "/");
+        // replace does not rescan its own output, so "/././" would leave a "/./" behind
+        while (path.contains("/./")) {
+            path = path.replace("/./", "/");
+        }
     }
 
     // /../

@@ -118,4 +118,16 @@ public class UriParserTest {
         Uri context = new Uri("https", null, "example.com", 80, "/path", "q=2", null);
         validateAgainstRelativeURI(context, "https://example.com:80/path?q=2", "./relative/url/.");
     }
+
+    @Test
+    public void testAbsoluteUrlWithConsecutiveDotSegments() {
+        UriParser parser = UriParser.parse(null, "http://example.com/a/././../x");
+        assertEquals(URI.create("http://example.com/a/././../x").normalize().getPath(), parser.path);
+    }
+
+    @Test
+    public void testRelativeURLWithConsecutiveDotSegments() {
+        Uri context = new Uri("https", null, "example.com", 80, "/a/b/c", "q=2", null);
+        validateAgainstRelativeURI(context, "https://example.com:80/a/b/c?q=2", "././../x");
+    }
 }
