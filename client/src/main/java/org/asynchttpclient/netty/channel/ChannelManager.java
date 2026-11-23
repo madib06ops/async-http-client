@@ -34,6 +34,7 @@ import io.netty.channel.group.ChannelGroupFuture;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.websocketx.Utf8FrameValidator;
 import io.netty.handler.codec.http.websocketx.WebSocket08FrameDecoder;
 import io.netty.handler.codec.http.websocketx.WebSocket08FrameEncoder;
 import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
@@ -133,6 +134,7 @@ public class ChannelManager {
     public static final String HTTP2_MULTIPLEX = "http2-multiplex";
     public static final String AHC_HTTP2_HANDLER = "ahc-http2";
     private static final String TARGET_SSL_HANDLER = "target-ssl";
+    private static final String WS_UTF8_VALIDATOR = "ws-utf8-validator";
     private static final Logger LOGGER = LoggerFactory.getLogger(ChannelManager.class);
     // Guards the one-time WARN emitted when a native transport was requested but is unavailable and we
     // fall back to NIO. Logged once per JVM to avoid spamming logs when many clients are created.
@@ -1396,6 +1398,11 @@ public class ChannelManager {
         if (config.isAggregateWebSocketFrameFragments()) {
             pipeline.addAfter(WS_DECODER_HANDLER, WS_FRAME_AGGREGATOR, new WebSocketFrameAggregator(config.getWebSocketMaxBufferSize()));
         }
+
+        // RFC 6455 section 8.1: a text message that is not UTF-8 fails the connection, with 1007 (section 7.4.1).
+        // Last before the AHC handler, so it sees the inflated payload when permessage-deflate is negotiated:
+        // the compression handler has already put its decoder in front of that handler by the time we get here.
+        pipeline.addBefore(AHC_WS_HANDLER, WS_UTF8_VALIDATOR, new Utf8FrameValidator());
 
         pipeline.remove(HTTP_CLIENT_CODEC);
     }
